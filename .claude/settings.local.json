@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp:*)",
+      "WebFetch(domain:developers.muralpay.com)",
+      "mcp__mural-production__list-endpoints",
+      "mcp__mural-production__search-endpoints",
+      "mcp__mural-production__get-endpoint",
+      "Bash(curl:*)",
+      "Bash(npm init:*)",
+      "Bash(npm install:*)",
+      "Bash(npx prisma:*)",
+      "Bash(brew services:*)",
+      "Bash(pg_isready)",
+      "Bash(brew list:*)",
+      "Bash(docker run:*)",
+      "Bash(open -a Docker)",
+      "Bash(docker info:*)",
+      "Bash(docker context:*)",
+      "Read(//Users/tzhou/.docker/run/**)",
+      "Read(//var/run/**)",
+      "Bash(DOCKER_HOST=unix:///var/run/docker.sock docker run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls /Users/tzhou/Documents/Github/MuralPayChallenge/src/generated/prisma/*.ts)",
+      "Bash(grep -r \"PrismaClient\\\\|export\" /Users/tzhou/Documents/Github/MuralPayChallenge/src/generated/prisma/index*)",
+      "Bash(xargs cat:*)"
+    ]
+  }
+}

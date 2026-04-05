@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Product {
+  id          String      @id @default(uuid())
+  name        String
+  description String?
+  priceUsdc   Decimal     @db.Decimal(18, 6)
+  imageUrl    String?
+  stock       Int         @default(-1) // -1 = unlimited
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  orderItems  OrderItem[]
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Order {
+  id                 String      @id @default(uuid())
+  customerId         String
+  customer           Customer    @relation(fields: [customerId], references: [id])
+  status             OrderStatus @default(PENDING_PAYMENT)
+  totalUsdc          Decimal     @db.Decimal(18, 6)
+  walletAddress      String
+  paymentTxHash      String?
+  muralTransactionId String?     @unique
+  expiresAt          DateTime
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  items              OrderItem[]
+  withdrawal         Withdrawal?
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PAYOUT_PENDING
+  PAYOUT_COMPLETE
+  PAYOUT_FAILED
+  EXPIRED
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  priceUsdc Decimal @db.Decimal(18, 6)
+}
+
+model Withdrawal {
+  id               String           @id @default(uuid())
+  orderId          String           @unique
+  order            Order            @relation(fields: [orderId], references: [id])
+  muralPayoutReqId String
+  muralPayoutId    String?
+  status           WithdrawalStatus @default(INITIATED)
+  usdcAmount       Decimal          @db.Decimal(18, 6)
+  copAmount        Decimal?         @db.Decimal(18, 2)
+  exchangeRate     Decimal?         @db.Decimal(18, 6)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+}
+
+enum WithdrawalStatus {
+  INITIATED
+  AWAITING_EXECUTION
+  PENDING
+  COMPLETED
+  FAILED
+  REFUND_IN_PROGRESS
+  REFUNDED
+}
+
+model MerchantConfig {
+  id               String   @id @default("singleton")
+  muralAccountId   String
+  walletAddress    String
+  counterpartyId   String?
+  payoutMethodId   String?
+  webhookId        String?
+  webhookPublicKey String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
