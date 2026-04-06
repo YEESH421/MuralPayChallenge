@@ -209,6 +209,14 @@ export async function searchCounterparties(): Promise<MuralCounterparty[]> {
   return res.data.results;
 }
 
+export async function searchPayoutMethods(counterpartyId: string): Promise<MuralPayoutMethod[]> {
+  const res = await client.post<{ total: number; results: MuralPayoutMethod[] }>(
+    `/api/counterparties/${counterpartyId}/payout-methods/search`,
+    {},
+  );
+  return res.data.results;
+}
+
 // ── Webhooks ────────────────────────────────────────────────────────────────
 
 export async function createWebhook(

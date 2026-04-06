@@ -90,17 +90,25 @@ adminRouter.post('/setup', async (_req: Request, res: Response) => {
   }
 
   if (!payoutMethodId && counterpartyId) {
-    const pm = await mural.createCopPayoutMethod(counterpartyId, {
-      alias: 'Merchant Bancolombia COP',
-      bankId: 'bank_cop_022',
-      phoneNumber: '+573001234567',
-      accountType: 'CHECKING',
-      bankAccountNumber: '19836529841',
-      documentNumber: '890903938',
-      documentType: 'NATIONAL_ID',
-    });
-    payoutMethodId = pm.id;
-    steps.push('Created COP payout method');
+    try {
+      const pm = await mural.createCopPayoutMethod(counterpartyId, {
+        alias: 'Merchant Bancolombia COP',
+        bankId: 'bank_cop_022',
+        phoneNumber: '+573001234567',
+        accountType: 'CHECKING',
+        bankAccountNumber: '19836529841',
+        documentNumber: '890903938',
+        documentType: 'NATIONAL_ID',
+      });
+      payoutMethodId = pm.id;
+      steps.push('Created COP payout method');
+    } catch {
+      const methods = await mural.searchPayoutMethods(counterpartyId);
+      const found = methods[0];
+      if (!found) throw new Error('Could not find existing payout method');
+      payoutMethodId = found.id;
+      steps.push('Found existing payout method');
+    }
   }
 
   if (!webhookId && config.webhookPublicUrl && !config.webhookPublicUrl.includes('your-app')) {
