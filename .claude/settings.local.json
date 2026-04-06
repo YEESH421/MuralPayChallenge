@@ -31,7 +31,9 @@
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
       "Bash(git push:*)",
-      "Bash(./scripts/test-api.sh:*)"
+      "Bash(./scripts/test-api.sh:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

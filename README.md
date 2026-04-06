@@ -194,86 +194,29 @@ Full OpenAPI spec: [`openapi.json`](./openapi.json)
 
 ---
 
-## Testing
+## Current Status
 
-### Smoke Test Suite
-
-An automated smoke test script exercises all endpoints:
-
-```bash
-# Against local server (default)
-./scripts/test-api.sh
-
-# Against a deployed instance
-./scripts/test-api.sh https://your-app.railway.app
-
-# With a custom API key
-./scripts/test-api.sh https://your-app.railway.app your-secret-key
-```
-
-The script requires only `curl` and `python3`. It creates its own test fixtures and validates response status codes and body content. Exit code 0 means all tests passed.
-
-### Manual End-to-End Flow
-
-**1. Create an order:**
-
-```bash
-curl -X POST http://localhost:3000/orders \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customer": { "name": "Jane Doe", "email": "jane@example.com" },
-    "items": [{ "productId": "<product-id>", "quantity": 1 }]
-  }'
-```
-
-The response includes `walletAddress`, `totalUsdc`, `blockchain: "POLYGON"`, and human-readable `instructions`.
-
-**2. Send payment:**
-
-Send the exact USDC amount to the wallet address on Polygon. In sandbox, use the Mural dashboard: **Move Money -> Pay -> +Add Contact** with the wallet address.
-
-**3. Check order status:**
-
-```bash
-curl http://localhost:3000/orders/<order-id>
-```
-
-Status progresses: `PENDING_PAYMENT` -> `PAID` -> `PAYOUT_PENDING` -> `PAYOUT_COMPLETE`
-
-**4. View merchant dashboard:**
-
-```bash
-curl http://localhost:3000/merchant/orders -H "x-api-key: your-secret"
-curl http://localhost:3000/merchant/withdrawals -H "x-api-key: your-secret"
-```
+- **Database**: PostgreSQL schema is deployed and auto-initializes on server startup (tables, enums, constraints).
+- **API**: All endpoints are deployed on Railway and operational. The `scripts/test-api.sh` smoke test suite verifies health, admin setup, product CRUD, order creation/validation, and merchant dashboard endpoints end-to-end against the live deployment.
+- **Mural integration**: Account, counterparty, COP payout method, and webhook are all registered in the Mural sandbox. The webhook endpoint accepts events and returns 200.
+- **Payment detection**: Not yet verified end-to-end. Deposits sent via the Mural sandbox have not been matched to pending orders -- the Mural transaction search API returns zero results for the account, so the matching logic has nothing to work with. This needs further investigation into how sandbox deposits surface in the Mural API.
 
 ---
 
-## Database Schema
+## Future Work
 
-The schema is auto-created on server startup. All tables use UUID primary keys.
+1. **Fix payment detection** -- The webhook and polling infrastructure is in place, but deposits are not appearing in Mural's transaction search API. This may require using a different sandbox flow to simulate inbound USDC deposits, or a different Mural API endpoint to query them.
 
-| Table            | Purpose                                                    |
-| ---------------- | ---------------------------------------------------------- |
-| `Product`        | Catalog items (name, price in USDC, stock, active flag)    |
-| `Customer`       | Buyer identity (name, email)                               |
-| `Order`          | Purchase record linking customer to payment state          |
-| `OrderItem`      | Line items within an order (product, quantity, unit price) |
-| `Withdrawal`     | Tracks USDC->COP payout requests and their Mural status    |
-| `MerchantConfig` | Singleton: Mural account ID, wallet, counterparty, webhook |
+2. **Replace FIFO amount matching** -- The current strategy matches deposits to orders by exact USDC amount (oldest pending order first). This will not scale: multiple orders with the same total are ambiguous, and concurrent payments of the same amount will be matched arbitrarily. A more robust approach would embed a unique sub-cent amount per order (e.g., `$50.003287`) or use Mural's Payin API to generate unique deposit addresses per order.
 
-**Custom enums:**
+3. **Order expiry cron** -- Periodically mark stale `PENDING_PAYMENT` orders as `EXPIRED`.
 
-- `OrderStatus`: `PENDING_PAYMENT`, `PAID`, `PAYOUT_PENDING`, `PAYOUT_COMPLETE`, `PAYOUT_FAILED`, `EXPIRED`
-- `WithdrawalStatus`: `INITIATED`, `AWAITING_EXECUTION`, `PENDING`, `COMPLETED`, `FAILED`, `REFUND_IN_PROGRESS`, `REFUNDED`
+4. **Idempotency keys** -- Pass UUID keys to Mural payout creation for safe retries.
 
----
+5. **JWT authentication** -- Replace the shared `x-api-key` with proper customer/merchant auth.
 
-## Payment Matching
+6. **Webhook event log** -- Persist and deduplicate webhook events across restarts.
 
-Incoming USDC deposits are matched to pending orders by **exact amount (FIFO)**. When a deposit webhook arrives (or the 60-second polling job runs), the system:
+7. **Rate limiting** -- Protect public endpoints from abuse.
 
-1. Fetches recent transactions from the Mural API
-2. Filters for deposits not yet matched to an order
-3. For each deposit, finds the oldest `PENDING_PAYMENT` order with a matching `totalUsdc`
-4. Marks the order as `PAID` and immediately initiates a COP payout
+8. **Stock management** -- Decrement on order creation, restore on expiry/failure.
