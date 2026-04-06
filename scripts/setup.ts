@@ -16,8 +16,8 @@ import { initDb } from '../src/initDb';
 import * as mural from '../src/services/mural';
 
 const COP_BANK = {
-  bankName: 'Bancolombia',
-  bankAccountOwner: 'Mural Merchant',
+  alias: 'Merchant Bancolombia COP',
+  bankId: 'bank_cop_022',
   phoneNumber: '+573001234567',
   accountType: 'CHECKING' as const,
   bankAccountNumber: '19836529841',
@@ -89,19 +89,27 @@ async function main() {
 
   if (!counterpartyId) {
     console.log('\n👤 Creating merchant counterparty...');
-    const cp = await mural.createCounterparty({
-      type: 'business',
-      name: 'Mural Merchant CO',
-      email: 'merchant@example.com',
-      physicalAddress: {
-        address1: 'Carrera 7 # 71-21',
-        country: 'CO',
-        subDivision: 'DC',
-        city: 'Bogota',
-        postalCode: '110231',
-      },
-    });
-    counterpartyId = cp.id;
+    try {
+      const cp = await mural.createCounterparty({
+        type: 'business',
+        name: 'Mural Merchant CO',
+        email: 'merchant@example.com',
+        physicalAddress: {
+          address1: 'Carrera 7 # 71-21',
+          country: 'CO',
+          subDivision: 'DC',
+          city: 'Bogota',
+          postalCode: '110231',
+        },
+      });
+      counterpartyId = cp.id;
+    } catch {
+      console.log('   Counterparty email already exists, searching for existing...');
+      const counterparties = await mural.searchCounterparties();
+      const existing = counterparties.find((c) => c.email === 'merchant@example.com');
+      if (!existing) throw new Error('Could not find existing counterparty');
+      counterpartyId = existing.id;
+    }
     console.log(`   ✅ Counterparty ID: ${counterpartyId}`);
   } else {
     console.log(`\n✅ Using existing counterparty: ${counterpartyId}`);

@@ -49,30 +49,50 @@ adminRouter.post('/setup', async (_req: Request, res: Response) => {
     const account = await mural.createAccount('Marketplace Account', 'USDC receiving account');
     muralAccountId = account.id;
     walletAddress = account.accountDetails?.walletDetails.walletAddress ?? '';
+    if (!walletAddress && account.status === 'INITIALIZING') {
+      for (let i = 0; i < 15 && !walletAddress; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const accounts = await mural.getAccounts();
+        const a = accounts.find((x) => x.id === muralAccountId);
+        walletAddress = a?.accountDetails?.walletDetails.walletAddress ?? '';
+      }
+    }
     steps.push('Created Mural account');
+  } else if (!walletAddress) {
+    const accounts = await mural.getAccounts();
+    const a = accounts.find((x) => x.id === muralAccountId);
+    walletAddress = a?.accountDetails?.walletDetails.walletAddress ?? '';
   }
 
   if (!counterpartyId) {
-    const cp = await mural.createCounterparty({
-      type: 'business',
-      name: 'Mural Merchant CO',
-      email: 'merchant@example.com',
-      physicalAddress: {
-        address1: 'Carrera 7 # 71-21',
-        country: 'CO',
-        subDivision: 'DC',
-        city: 'Bogota',
-        postalCode: '110231',
-      },
-    });
-    counterpartyId = cp.id;
-    steps.push('Created counterparty');
+    try {
+      const cp = await mural.createCounterparty({
+        type: 'business',
+        name: 'Mural Merchant CO',
+        email: 'merchant@example.com',
+        physicalAddress: {
+          address1: 'Carrera 7 # 71-21',
+          country: 'CO',
+          subDivision: 'DC',
+          city: 'Bogota',
+          postalCode: '110231',
+        },
+      });
+      counterpartyId = cp.id;
+      steps.push('Created counterparty');
+    } catch {
+      const counterparties = await mural.searchCounterparties();
+      const found = counterparties.find((c) => c.email === 'merchant@example.com');
+      if (!found) throw new Error('Could not find existing counterparty');
+      counterpartyId = found.id;
+      steps.push('Found existing counterparty');
+    }
   }
 
   if (!payoutMethodId && counterpartyId) {
     const pm = await mural.createCopPayoutMethod(counterpartyId, {
-      bankName: 'Bancolombia',
-      bankAccountOwner: 'Mural Merchant',
+      alias: 'Merchant Bancolombia COP',
+      bankId: 'bank_cop_022',
       phoneNumber: '+573001234567',
       accountType: 'CHECKING',
       bankAccountNumber: '19836529841',

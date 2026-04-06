@@ -170,25 +170,25 @@ export async function createCounterparty(data: {
 export async function createCopPayoutMethod(
   counterpartyId: string,
   details: {
-    bankName: string;
-    bankAccountOwner: string;
+    alias: string;
+    bankId: string;
     phoneNumber: string;
     accountType: 'CHECKING' | 'SAVINGS';
     bankAccountNumber: string;
     documentNumber: string;
-    documentType: 'NATIONAL_ID' | 'PASSPORT' | 'RESIDENT_ID' | 'RUC' | 'TAX_ID';
+    documentType: 'NATIONAL_ID' | 'RUC_NIT' | 'PASSPORT' | 'RESIDENT_ID';
   },
 ): Promise<MuralPayoutMethod> {
   const res = await client.post<MuralPayoutMethod>(
     `/api/counterparties/${counterpartyId}/payout-methods`,
     {
+      alias: details.alias,
       payoutMethod: {
         type: 'cop',
-        bankName: details.bankName,
-        bankAccountOwner: details.bankAccountOwner,
-        fiatAndRailDetails: {
-          type: 'cop',
+        details: {
+          type: 'copDomestic',
           symbol: 'COP',
+          bankId: details.bankId,
           phoneNumber: details.phoneNumber,
           accountType: details.accountType,
           bankAccountNumber: details.bankAccountNumber,
@@ -199,6 +199,14 @@ export async function createCopPayoutMethod(
     },
   );
   return res.data;
+}
+
+export async function searchCounterparties(): Promise<MuralCounterparty[]> {
+  const res = await client.post<{ total: number; results: MuralCounterparty[] }>(
+    '/api/counterparties/search',
+    {},
+  );
+  return res.data.results;
 }
 
 // ── Webhooks ────────────────────────────────────────────────────────────────
