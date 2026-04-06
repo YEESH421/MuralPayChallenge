@@ -21,16 +21,6 @@ ordersRouter.post('/', async (req: Request, res: Response) => {
     return;
   }
 
-  const { rows: configRows } = await pool.query<MerchantConfig>(
-    'SELECT * FROM "MerchantConfig" WHERE id = $1',
-    [MERCHANT_CONFIG_ID],
-  );
-  const merchantConfig = configRows[0];
-  if (!merchantConfig) {
-    res.status(503).json({ error: 'Merchant not configured. Run setup first.' });
-    return;
-  }
-
   const productIds = items.map((i) => i.productId);
   const { rows: products } = await pool.query<Product>(
     'SELECT * FROM "Product" WHERE id = ANY($1::text[]) AND "isActive" = TRUE',
@@ -39,6 +29,16 @@ ordersRouter.post('/', async (req: Request, res: Response) => {
 
   if (products.length !== productIds.length) {
     res.status(400).json({ error: 'One or more products not found or inactive' });
+    return;
+  }
+
+  const { rows: configRows } = await pool.query<MerchantConfig>(
+    'SELECT * FROM "MerchantConfig" WHERE id = $1',
+    [MERCHANT_CONFIG_ID],
+  );
+  const merchantConfig = configRows[0];
+  if (!merchantConfig) {
+    res.status(503).json({ error: 'Merchant not configured. Run setup first.' });
     return;
   }
 
