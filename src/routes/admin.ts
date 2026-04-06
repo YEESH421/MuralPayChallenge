@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db';
+import { pool } from '../db';
 import { merchantAuth } from '../middleware/auth';
 import * as mural from '../services/mural';
 import { config, MERCHANT_CONFIG_ID, WEBHOOK_CATEGORIES } from '../config';
@@ -21,21 +21,27 @@ adminRouter.post('/products', async (req: Request, res: Response) => {
     return;
   }
 
-  const product = await db.product.create({
-    data: { name, description, priceUsdc, imageUrl, stock: stock ?? -1 },
-  });
-  res.status(201).json(product);
+  const { rows } = await pool.query(
+    `INSERT INTO "Product" (id, name, description, "priceUsdc", "imageUrl", stock)
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5) RETURNING *`,
+    [name, description ?? null, priceUsdc, imageUrl ?? null, stock ?? -1],
+  );
+  res.status(201).json(rows[0]);
 });
 
 adminRouter.post('/setup', async (_req: Request, res: Response) => {
-  const existing = await db.merchantConfig.findUnique({ where: { id: MERCHANT_CONFIG_ID } });
+  const { rows: configRows } = await pool.query(
+    'SELECT * FROM "MerchantConfig" WHERE id = $1',
+    [MERCHANT_CONFIG_ID],
+  );
+  const existing = configRows[0];
 
-  let muralAccountId = existing?.muralAccountId ?? '';
-  let walletAddress = existing?.walletAddress ?? '';
-  let counterpartyId = existing?.counterpartyId ?? '';
-  let payoutMethodId = existing?.payoutMethodId ?? '';
-  let webhookId = existing?.webhookId ?? '';
-  let webhookPublicKey = existing?.webhookPublicKey ?? '';
+  let muralAccountId: string = existing?.muralAccountId ?? '';
+  let walletAddress: string = existing?.walletAddress ?? '';
+  let counterpartyId: string = existing?.counterpartyId ?? '';
+  let payoutMethodId: string = existing?.payoutMethodId ?? '';
+  let webhookId: string = existing?.webhookId ?? '';
+  let webhookPublicKey: string = existing?.webhookPublicKey ?? '';
 
   const steps: string[] = [];
 
@@ -88,11 +94,27 @@ adminRouter.post('/setup', async (_req: Request, res: Response) => {
     steps.push('Registered and activated webhook');
   }
 
-  await db.merchantConfig.upsert({
-    where: { id: MERCHANT_CONFIG_ID },
-    create: { id: MERCHANT_CONFIG_ID, muralAccountId, walletAddress, counterpartyId, payoutMethodId, webhookId: webhookId || null, webhookPublicKey: webhookPublicKey || null },
-    update: { muralAccountId, walletAddress, counterpartyId, payoutMethodId, webhookId: webhookId || null, webhookPublicKey: webhookPublicKey || null },
-  });
+  await pool.query(
+    `INSERT INTO "MerchantConfig" (id, "muralAccountId", "walletAddress", "counterpartyId", "payoutMethodId", "webhookId", "webhookPublicKey")
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO UPDATE SET
+       "muralAccountId" = EXCLUDED."muralAccountId",
+       "walletAddress" = EXCLUDED."walletAddress",
+       "counterpartyId" = EXCLUDED."counterpartyId",
+       "payoutMethodId" = EXCLUDED."payoutMethodId",
+       "webhookId" = EXCLUDED."webhookId",
+       "webhookPublicKey" = EXCLUDED."webhookPublicKey",
+       "updatedAt" = NOW()`,
+    [
+      MERCHANT_CONFIG_ID,
+      muralAccountId,
+      walletAddress,
+      counterpartyId || null,
+      payoutMethodId || null,
+      webhookId || null,
+      webhookPublicKey || null,
+    ],
+  );
 
   res.json({
     message: steps.length ? 'Setup complete' : 'Already configured',
@@ -102,7 +124,11 @@ adminRouter.post('/setup', async (_req: Request, res: Response) => {
 });
 
 adminRouter.get('/config', async (_req: Request, res: Response) => {
-  const cfg = await db.merchantConfig.findUnique({ where: { id: MERCHANT_CONFIG_ID } });
+  const { rows } = await pool.query(
+    'SELECT * FROM "MerchantConfig" WHERE id = $1',
+    [MERCHANT_CONFIG_ID],
+  );
+  const cfg = rows[0];
   if (!cfg) {
     res.status(404).json({ error: 'Not configured. POST /admin/setup to initialize.' });
     return;

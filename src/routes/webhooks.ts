@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import { db } from '../db';
+import { pool } from '../db';
 import { MERCHANT_CONFIG_ID, WEBHOOK_CATEGORIES } from '../config';
 import { matchDeposits } from '../services/orderService';
 import { syncPayoutStatus } from '../services/payoutService';
@@ -33,8 +33,11 @@ webhooksRouter.post('/', async (req: Request, res: Response) => {
     (req as Request & { rawBody?: Buffer }).rawBody ?? Buffer.from(JSON.stringify(req.body));
   const signatureHeader = req.headers['mural-signature'] as string | undefined;
 
-  const merchantConfig = await db.merchantConfig.findUnique({ where: { id: MERCHANT_CONFIG_ID } });
-  const publicKey = merchantConfig?.webhookPublicKey ?? undefined;
+  const { rows } = await pool.query(
+    'SELECT * FROM "MerchantConfig" WHERE id = $1',
+    [MERCHANT_CONFIG_ID],
+  );
+  const publicKey = rows[0]?.webhookPublicKey ?? undefined;
 
   const isValid = verifyMuralSignature(rawBody, signatureHeader, publicKey);
   if (!isValid) {

@@ -11,7 +11,8 @@
 
 import 'dotenv/config';
 import { config, MERCHANT_CONFIG_ID, WEBHOOK_CATEGORIES } from '../src/config';
-import { db } from '../src/db';
+import { pool } from '../src/db';
+import { initDb } from '../src/initDb';
 import * as mural from '../src/services/mural';
 
 const COP_BANK = {
@@ -35,8 +36,14 @@ const SAMPLE_PRODUCTS = [
 async function main() {
   console.log('🚀 Starting Mural Pay marketplace setup...\n');
 
-  // Check for existing config
-  const existing = await db.merchantConfig.findUnique({ where: { id: MERCHANT_CONFIG_ID } });
+  await initDb();
+
+  const { rows: existingRows } = await pool.query(
+    'SELECT * FROM "MerchantConfig" WHERE id = $1',
+    [MERCHANT_CONFIG_ID],
+  );
+  const existing = existingRows[0];
+
   if (existing) {
     console.log('✅ MerchantConfig already exists:');
     console.log(`   Account ID:     ${existing.muralAccountId}`);
@@ -47,9 +54,8 @@ async function main() {
     console.log('\nRe-running will skip account/counterparty creation.');
   }
 
-
-  let muralAccountId = existing?.muralAccountId ?? '';
-  let walletAddress = existing?.walletAddress ?? '';
+  let muralAccountId: string = existing?.muralAccountId ?? '';
+  let walletAddress: string = existing?.walletAddress ?? '';
 
   if (!muralAccountId) {
     console.log('📦 Creating Mural API account...');
@@ -79,8 +85,7 @@ async function main() {
     console.log(`✅ Using existing account: ${muralAccountId}`);
   }
 
-
-  let counterpartyId = existing?.counterpartyId ?? '';
+  let counterpartyId: string = existing?.counterpartyId ?? '';
 
   if (!counterpartyId) {
     console.log('\n👤 Creating merchant counterparty...');
@@ -102,8 +107,7 @@ async function main() {
     console.log(`\n✅ Using existing counterparty: ${counterpartyId}`);
   }
 
-
-  let payoutMethodId = existing?.payoutMethodId ?? '';
+  let payoutMethodId: string = existing?.payoutMethodId ?? '';
 
   if (!payoutMethodId) {
     console.log('\n💳 Creating COP payout method...');
@@ -114,9 +118,8 @@ async function main() {
     console.log(`\n✅ Using existing payout method: ${payoutMethodId}`);
   }
 
-
-  let webhookId = existing?.webhookId ?? '';
-  let webhookPublicKey = existing?.webhookPublicKey ?? '';
+  let webhookId: string = existing?.webhookId ?? '';
+  let webhookPublicKey: string = existing?.webhookPublicKey ?? '';
 
   if (!webhookId) {
     if (!config.webhookPublicUrl || config.webhookPublicUrl.includes('your-app')) {
@@ -137,36 +140,43 @@ async function main() {
     console.log(`\n✅ Using existing webhook: ${webhookId}`);
   }
 
-
   console.log('\n💾 Saving config to database...');
-  await db.merchantConfig.upsert({
-    where: { id: MERCHANT_CONFIG_ID },
-    create: {
-      id: MERCHANT_CONFIG_ID,
+  await pool.query(
+    `INSERT INTO "MerchantConfig" (id, "muralAccountId", "walletAddress", "counterpartyId", "payoutMethodId", "webhookId", "webhookPublicKey")
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO UPDATE SET
+       "muralAccountId" = EXCLUDED."muralAccountId",
+       "walletAddress" = EXCLUDED."walletAddress",
+       "counterpartyId" = EXCLUDED."counterpartyId",
+       "payoutMethodId" = EXCLUDED."payoutMethodId",
+       "webhookId" = EXCLUDED."webhookId",
+       "webhookPublicKey" = EXCLUDED."webhookPublicKey",
+       "updatedAt" = NOW()`,
+    [
+      MERCHANT_CONFIG_ID,
       muralAccountId,
       walletAddress,
-      counterpartyId,
-      payoutMethodId,
-      webhookId: webhookId || null,
-      webhookPublicKey: webhookPublicKey || null,
-    },
-    update: {
-      muralAccountId,
-      walletAddress,
-      counterpartyId,
-      payoutMethodId,
-      webhookId: webhookId || null,
-      webhookPublicKey: webhookPublicKey || null,
-    },
-  });
+      counterpartyId || null,
+      payoutMethodId || null,
+      webhookId || null,
+      webhookPublicKey || null,
+    ],
+  );
   console.log('   ✅ Config saved.');
 
+  const { rows: countRows } = await pool.query('SELECT COUNT(*) FROM "Product"');
+  const productCount = Number(countRows[0].count);
 
-  const productCount = await db.product.count();
   if (productCount === 0) {
     console.log('\n🛍️  Seeding sample products...');
-    await db.product.createMany({ data: SAMPLE_PRODUCTS });
-    SAMPLE_PRODUCTS.forEach((p) => console.log(`   ✅ ${p.name} — $${p.priceUsdc} USDC`));
+    for (const p of SAMPLE_PRODUCTS) {
+      await pool.query(
+        `INSERT INTO "Product" (id, name, description, "priceUsdc", stock)
+         VALUES (gen_random_uuid()::text, $1, $2, $3, $4)`,
+        [p.name, p.description, p.priceUsdc, p.stock],
+      );
+      console.log(`   ✅ ${p.name} — $${p.priceUsdc} USDC`);
+    }
   } else {
     console.log(`\n✅ ${productCount} products already seeded.`);
   }
@@ -175,7 +185,7 @@ async function main() {
   console.log(`Merchant wallet address (customers send USDC here):`);
   console.log(`  ${walletAddress} (Polygon)`);
 
-  await db.$disconnect();
+  await pool.end();
 }
 
 function sleep(ms: number) {

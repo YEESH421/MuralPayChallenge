@@ -1,11 +1,15 @@
-import { OrderStatus } from '@prisma/client';
-import { db } from '../db';
+import { pool } from '../db';
 import { MERCHANT_CONFIG_ID } from '../config';
 import * as mural from './mural';
 import { initiateWithdrawal } from './payoutService';
+import { MerchantConfig } from '../types';
 
 export async function matchDeposits(): Promise<void> {
-  const merchantConfig = await db.merchantConfig.findUnique({ where: { id: MERCHANT_CONFIG_ID } });
+  const { rows } = await pool.query<MerchantConfig>(
+    'SELECT * FROM "MerchantConfig" WHERE id = $1',
+    [MERCHANT_CONFIG_ID],
+  );
+  const merchantConfig = rows[0];
   if (!merchantConfig) return;
 
   const { results: transactions } = await mural.searchTransactions(merchantConfig.muralAccountId, 50);
@@ -17,32 +21,29 @@ export async function matchDeposits(): Promise<void> {
 
   if (!deposits.length) return;
 
-  // Batch check: find all deposit IDs already matched to avoid N+1 per-deposit queries
   const depositIds = deposits.map((d) => d.id);
-  const alreadyMatchedIds = new Set(
-    (
-      await db.order.findMany({
-        where: { muralTransactionId: { in: depositIds } },
-        select: { muralTransactionId: true },
-      })
-    ).map((o) => o.muralTransactionId as string),
+  const { rows: matchedRows } = await pool.query<{ muralTransactionId: string }>(
+    'SELECT "muralTransactionId" FROM "Order" WHERE "muralTransactionId" = ANY($1::text[])',
+    [depositIds],
   );
+  const alreadyMatchedIds = new Set(matchedRows.map((r) => r.muralTransactionId));
 
   for (const deposit of deposits) {
     if (alreadyMatchedIds.has(deposit.id)) continue;
 
     const depositAmount = deposit.amount.tokenAmount;
 
-    // FIFO: oldest pending order with the exact USDC amount wins
-    const matchingOrder = await db.order.findFirst({
-      where: {
-        status: OrderStatus.PENDING_PAYMENT,
-        totalUsdc: depositAmount,
-        expiresAt: { gt: new Date() },
-        muralTransactionId: null,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+    const { rows: orderRows } = await pool.query(
+      `SELECT * FROM "Order"
+       WHERE status = 'PENDING_PAYMENT'
+         AND "totalUsdc" = $1
+         AND "expiresAt" > NOW()
+         AND "muralTransactionId" IS NULL
+       ORDER BY "createdAt" ASC
+       LIMIT 1`,
+      [depositAmount],
+    );
+    const matchingOrder = orderRows[0];
 
     if (!matchingOrder) {
       console.log(`[orderService] No matching order for deposit ${deposit.id} (${depositAmount} USDC)`);
@@ -51,23 +52,20 @@ export async function matchDeposits(): Promise<void> {
 
     console.log(`[orderService] Matched deposit ${deposit.id} → order ${matchingOrder.id} (${depositAmount} USDC)`);
 
-    await db.order.update({
-      where: { id: matchingOrder.id },
-      data: {
-        status: OrderStatus.PAID,
-        muralTransactionId: deposit.id,
-        paymentTxHash: deposit.hash,
-      },
-    });
+    await pool.query(
+      `UPDATE "Order" SET status = 'PAID', "muralTransactionId" = $1, "paymentTxHash" = $2, "updatedAt" = NOW()
+       WHERE id = $3`,
+      [deposit.id, deposit.hash, matchingOrder.id],
+    );
 
     try {
       await initiateWithdrawal(matchingOrder.id, merchantConfig);
     } catch (err) {
       console.error(`[orderService] Payout initiation failed for order ${matchingOrder.id}:`, err);
-      await db.order.update({
-        where: { id: matchingOrder.id },
-        data: { status: OrderStatus.PAYOUT_FAILED },
-      });
+      await pool.query(
+        `UPDATE "Order" SET status = 'PAYOUT_FAILED', "updatedAt" = NOW() WHERE id = $1`,
+        [matchingOrder.id],
+      );
     }
   }
 }

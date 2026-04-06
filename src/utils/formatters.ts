@@ -1,16 +1,6 @@
-import { Prisma } from '@prisma/client';
+import { OrderWithAll, WithdrawalWithOrder, Withdrawal, OrderItemWithProduct } from '../types';
 
-type OrderWithAll = Prisma.OrderGetPayload<{
-  include: { customer: true; items: { include: { product: true } }; withdrawal: true };
-}>;
-
-type WithdrawalWithOrder = Prisma.WithdrawalGetPayload<{
-  include: { order: { include: { customer: true } } };
-}>;
-
-type OrderItem = OrderWithAll['items'][number];
-
-export function formatOrderItems(items: OrderItem[], includeSubtotal = false) {
+export function formatOrderItems(items: OrderItemWithProduct[], includeSubtotal = false) {
   return items.map((i) => ({
     productName: i.product.name,
     quantity: i.quantity,
@@ -19,7 +9,7 @@ export function formatOrderItems(items: OrderItem[], includeSubtotal = false) {
   }));
 }
 
-export function formatWithdrawalSummary(w: OrderWithAll['withdrawal']) {
+export function formatWithdrawalSummary(w: Withdrawal | null) {
   if (!w) return null;
   return {
     status: w.status,
@@ -29,7 +19,7 @@ export function formatWithdrawalSummary(w: OrderWithAll['withdrawal']) {
   };
 }
 
-export function formatWithdrawalDetail(w: OrderWithAll['withdrawal']) {
+export function formatWithdrawalDetail(w: Withdrawal | null) {
   if (!w) return null;
   return {
     withdrawalId: w.id,

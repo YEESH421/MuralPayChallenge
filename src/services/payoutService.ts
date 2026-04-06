@@ -1,11 +1,8 @@
-import { MerchantConfig, OrderStatus, WithdrawalStatus } from '@prisma/client';
-import { db } from '../db';
+import { pool } from '../db';
 import * as mural from './mural';
+import { MerchantConfig, WithdrawalStatus } from '../types';
 
-export async function initiateWithdrawal(
-  orderId: string,
-  merchantConfig: MerchantConfig,
-): Promise<void> {
+export async function initiateWithdrawal(orderId: string, merchantConfig: MerchantConfig): Promise<void> {
   if (!merchantConfig.counterpartyId) {
     throw new Error('Merchant counterpartyId not configured — run setup first');
   }
@@ -13,7 +10,10 @@ export async function initiateWithdrawal(
     throw new Error('Merchant payoutMethodId not configured — run setup first');
   }
 
-  const order = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+  const { rows } = await pool.query('SELECT * FROM "Order" WHERE id = $1', [orderId]);
+  const order = rows[0];
+  if (!order) throw new Error(`Order ${orderId} not found`);
+
   const usdcAmount = Number(order.totalUsdc);
 
   const payoutReq = await mural.createPayoutRequest({
@@ -35,63 +35,62 @@ export async function initiateWithdrawal(
     ],
   });
 
-  await db.withdrawal.create({
-    data: {
-      orderId,
-      muralPayoutReqId: payoutReq.id,
-      status: WithdrawalStatus.AWAITING_EXECUTION,
-      usdcAmount,
-    },
-  });
+  await pool.query(
+    `INSERT INTO "Withdrawal" (id, "orderId", "muralPayoutReqId", status, "usdcAmount")
+     VALUES (gen_random_uuid()::text, $1, $2, 'AWAITING_EXECUTION', $3)`,
+    [orderId, payoutReq.id, usdcAmount],
+  );
 
   const executed = await mural.executePayoutRequest(payoutReq.id, 'FLEXIBLE');
-
   const firstPayout = executed.payouts[0];
   if (!firstPayout) {
-    throw new Error(`No payouts returned in execute response for request ${payoutReq.id}`);
+    throw new Error(`No payouts returned for request ${payoutReq.id}`);
   }
 
   await Promise.all([
-    db.withdrawal.update({
-      where: { orderId },
-      data: {
-        status: WithdrawalStatus.PENDING,
-        muralPayoutId: firstPayout.id,
-        exchangeRate: firstPayout.details?.exchangeRate ?? undefined,
-        copAmount: firstPayout.details?.fiatAmount?.fiatAmount ?? undefined,
-      },
-    }),
-    db.order.update({
-      where: { id: orderId },
-      data: { status: OrderStatus.PAYOUT_PENDING },
-    }),
+    pool.query(
+      `UPDATE "Withdrawal"
+       SET status = 'PENDING', "muralPayoutId" = $1, "exchangeRate" = $2, "copAmount" = $3, "updatedAt" = NOW()
+       WHERE "orderId" = $4`,
+      [
+        firstPayout.id,
+        firstPayout.details?.exchangeRate ?? null,
+        firstPayout.details?.fiatAmount?.fiatAmount ?? null,
+        orderId,
+      ],
+    ),
+    pool.query(
+      `UPDATE "Order" SET status = 'PAYOUT_PENDING', "updatedAt" = NOW() WHERE id = $1`,
+      [orderId],
+    ),
   ]);
 
   console.log(
     `[payoutService] Payout executed for order ${orderId}: ${usdcAmount} USDC → ` +
-    `${firstPayout.details?.fiatAmount?.fiatAmount ?? '?'} COP`,
+      `${firstPayout.details?.fiatAmount?.fiatAmount ?? '?'} COP`,
   );
 }
 
 function mapFiatStatus(muralStatus: string): WithdrawalStatus | null {
   const map: Record<string, WithdrawalStatus> = {
-    created: WithdrawalStatus.AWAITING_EXECUTION,
-    pending: WithdrawalStatus.PENDING,
-    'on-hold': WithdrawalStatus.PENDING,
-    completed: WithdrawalStatus.COMPLETED,
-    canceled: WithdrawalStatus.FAILED,
-    failed: WithdrawalStatus.FAILED,
-    refundInProgress: WithdrawalStatus.REFUND_IN_PROGRESS,
-    refunded: WithdrawalStatus.REFUNDED,
+    created: 'AWAITING_EXECUTION',
+    pending: 'PENDING',
+    'on-hold': 'PENDING',
+    completed: 'COMPLETED',
+    canceled: 'FAILED',
+    failed: 'FAILED',
+    refundInProgress: 'REFUND_IN_PROGRESS',
+    refunded: 'REFUNDED',
   };
   return map[muralStatus] ?? null;
 }
 
 export async function syncPayoutStatus(muralPayoutReqId: string): Promise<void> {
-  const withdrawal = await db.withdrawal.findFirst({
-    where: { muralPayoutReqId },
-    include: { order: true },
-  });
+  const { rows } = await pool.query(
+    'SELECT * FROM "Withdrawal" WHERE "muralPayoutReqId" = $1',
+    [muralPayoutReqId],
+  );
+  const withdrawal = rows[0];
   if (!withdrawal) {
     console.warn(`[payoutService] No withdrawal found for payout request ${muralPayoutReqId}`);
     return;
@@ -100,33 +99,41 @@ export async function syncPayoutStatus(muralPayoutReqId: string): Promise<void> 
   const payoutReq = await mural.getPayoutRequest(muralPayoutReqId);
   const firstPayout = payoutReq.payouts[0];
   const fiatStatus = firstPayout?.details?.fiatPayoutStatus?.type;
-
   if (!fiatStatus) return;
 
-  const newWithdrawalStatus = mapFiatStatus(fiatStatus);
-  if (!newWithdrawalStatus) return;
+  const newStatus = mapFiatStatus(fiatStatus);
+  if (!newStatus) return;
 
   const updates: Promise<unknown>[] = [
-    db.withdrawal.update({
-      where: { id: withdrawal.id },
-      data: {
-        status: newWithdrawalStatus,
-        copAmount: firstPayout?.details?.fiatAmount?.fiatAmount ?? undefined,
-        exchangeRate: firstPayout?.details?.exchangeRate ?? undefined,
-      },
-    }),
+    pool.query(
+      `UPDATE "Withdrawal"
+       SET status = $1, "copAmount" = $2, "exchangeRate" = $3, "updatedAt" = NOW()
+       WHERE id = $4`,
+      [
+        newStatus,
+        firstPayout?.details?.fiatAmount?.fiatAmount ?? null,
+        firstPayout?.details?.exchangeRate ?? null,
+        withdrawal.id,
+      ],
+    ),
   ];
 
-  if (newWithdrawalStatus === WithdrawalStatus.COMPLETED) {
+  if (newStatus === 'COMPLETED') {
     updates.push(
-      db.order.update({ where: { id: withdrawal.orderId }, data: { status: OrderStatus.PAYOUT_COMPLETE } }),
+      pool.query(
+        `UPDATE "Order" SET status = 'PAYOUT_COMPLETE', "updatedAt" = NOW() WHERE id = $1`,
+        [withdrawal.orderId],
+      ),
     );
-  } else if (newWithdrawalStatus === WithdrawalStatus.FAILED || newWithdrawalStatus === WithdrawalStatus.REFUNDED) {
+  } else if (newStatus === 'FAILED' || newStatus === 'REFUNDED') {
     updates.push(
-      db.order.update({ where: { id: withdrawal.orderId }, data: { status: OrderStatus.PAYOUT_FAILED } }),
+      pool.query(
+        `UPDATE "Order" SET status = 'PAYOUT_FAILED', "updatedAt" = NOW() WHERE id = $1`,
+        [withdrawal.orderId],
+      ),
     );
   }
 
   await Promise.all(updates);
-  console.log(`[payoutService] Payout ${muralPayoutReqId} status → ${newWithdrawalStatus}`);
+  console.log(`[payoutService] Payout ${muralPayoutReqId} status → ${newStatus}`);
 }
