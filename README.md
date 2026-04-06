@@ -2,6 +2,12 @@
 
 A backend service for a marketplace that accepts **USDC payments on Polygon** and automatically converts them to **Colombian Pesos (COP)** via the [Mural Pay API](https://developers.muralpay.com). Built as a take-home challenge demonstrating end-to-end crypto-to-fiat payment processing.
 
+## URL
+
+https://muralpaychallenge-production.up.railway.app
+
+You can test endpoints by running `./scripts/test-api.sh https://muralpaychallenge-production.up.railway.app merchant-secret-key`
+
 ## How It Works
 
 ```
@@ -199,13 +205,13 @@ Full OpenAPI spec: [`openapi.json`](./openapi.json)
 - **Database**: PostgreSQL schema is deployed and auto-initializes on server startup (tables, enums, constraints).
 - **API**: All endpoints are deployed on Railway and operational. The `scripts/test-api.sh` smoke test suite verifies health, admin setup, product CRUD, order creation/validation, and merchant dashboard endpoints end-to-end against the live deployment.
 - **Mural integration**: Account, counterparty, COP payout method, and webhook are all registered in the Mural sandbox. The webhook endpoint accepts events and returns 200.
-- **Payment detection**: Not yet verified end-to-end. Deposits sent via the Mural sandbox have not been matched to pending orders -- the Mural transaction search API returns zero results for the account, so the matching logic has nothing to work with. This needs further investigation into how sandbox deposits surface in the Mural API.
+- **Payment detection**: Not yet verified end-to-end. Pending orders are not being finalized for two reasons: (1) Webhook signature verification fails in production (`[webhook] Invalid signature — rejecting event`), causing all Mural `BALANCE_ACTIVITY` events to be dropped before deposit matching runs. The most likely cause is that `req.rawBody` is not being populated before JSON parsing, so the handler falls back to re-serializing the parsed body, which breaks the RSA signature check. (2) Even if the webhook were processed, the Mural transaction search API returns zero results for the account, so `matchDeposits()` has nothing to match against. Both issues need to be resolved before the `PENDING_PAYMENT` → `PAID` transition can work.
 
 ---
 
 ## Future Work
 
-1. **Fix payment detection** -- The webhook and polling infrastructure is in place, but deposits are not appearing in Mural's transaction search API. This may require using a different sandbox flow to simulate inbound USDC deposits, or a different Mural API endpoint to query them.
+1. **Fix payment detection** -- Two blockers prevent pending orders from being finalized: (a) Webhook signature verification always fails in production because `req.rawBody` is not captured before Express parses the JSON body -- the handler falls back to re-serializing `req.body`, which produces different bytes than the original payload and breaks the RSA check. Fix: capture the raw bytes in Express middleware before parsing. (b) Even with a valid signature, the Mural transaction search API returns zero results for the account. This may require a different sandbox flow to simulate inbound USDC deposits, or a different Mural API endpoint.
 
 2. **Replace FIFO amount matching** -- The current strategy matches deposits to orders by exact USDC amount (oldest pending order first). This will not scale: multiple orders with the same total are ambiguous, and concurrent payments of the same amount will be matched arbitrarily. A more robust approach would embed a unique sub-cent amount per order (e.g., `$50.003287`) or use Mural's Payin API to generate unique deposit addresses per order.
 
