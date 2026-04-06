@@ -258,7 +258,7 @@ Merchant                    Our Backend                  Database
 | **Runtime** | Node.js / TypeScript | Fast to build, widely deployed |
 | **Framework** | Express or Fastify | Lightweight, well-documented |
 | **Database** | PostgreSQL | Relational, production-grade, supports complex queries |
-| **ORM** | Prisma | Type-safe, migrations, great DX |
+| **DB Client** | pg (raw queries) | Lightweight, no ORM overhead |
 | **Deployment** | Railway or Render | Easy deploy, free tier, public URL |
 | **Scheduler** | node-cron (in-process) | For backup polling of transactions |
 

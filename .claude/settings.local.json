@@ -23,7 +23,15 @@
       "Bash(npx tsc:*)",
       "Bash(ls /Users/tzhou/Documents/Github/MuralPayChallenge/src/generated/prisma/*.ts)",
       "Bash(grep -r \"PrismaClient\\\\|export\" /Users/tzhou/Documents/Github/MuralPayChallenge/src/generated/prisma/index*)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Bash(python3 -m json.tool)",
+      "Bash(chmod +x /Users/tzhou/Documents/Github/MuralPayChallenge/scripts/test-api.sh)",
+      "Bash(/Users/tzhou/Documents/Github/MuralPayChallenge/scripts/test-api.sh)",
+      "Bash(/Users/tzhou/Documents/Github/MuralPayChallenge/scripts/test-api.sh:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(./scripts/test-api.sh:*)"
     ]
   }
 }

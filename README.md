@@ -18,7 +18,7 @@ Merchant → GET /merchant/orders   — view payment status
 ## Tech Stack
 
 - **Node.js / TypeScript** + Express
-- **PostgreSQL** + Prisma ORM
+- **PostgreSQL** (raw `pg` queries)
 - **Mural Pay Sandbox API** for USDC custody and COP payouts
 - **node-cron** for backup transaction polling
 - Deployed on **Railway**
@@ -56,9 +56,7 @@ WEBHOOK_PUBLIC_URL="https://your-deployed-url.railway.app"
 
 ### 3. Run Database Migration
 
-```bash
-npx prisma migrate dev --name init
-```
+The schema is initialized automatically on server startup via `src/initDb.ts`.
 
 ### 4. Run Setup Script (one-time)
 
