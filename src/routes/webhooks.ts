@@ -26,7 +26,7 @@ function verifyMuralSignature(
   }
 }
 
-webhooksRouter.post('/', async (req: Request, res: Response) => {
+webhooksRouter.post('/mural', async (req: Request, res: Response) => {
   res.status(200).json({ received: true });
 
   const rawBody: Buffer =

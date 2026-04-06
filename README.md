@@ -1,38 +1,82 @@
 # Mural Pay Marketplace Backend
 
-A backend service powering a marketplace that accepts USDC payments on Polygon and automatically converts receipts to Colombian Pesos (COP) via the [Mural Pay API](https://developers.muralpay.com).
+A backend service for a marketplace that accepts **USDC payments on Polygon** and automatically converts them to **Colombian Pesos (COP)** via the [Mural Pay API](https://developers.muralpay.com). Built as a take-home challenge demonstrating end-to-end crypto-to-fiat payment processing.
 
-## Architecture
+## How It Works
 
 ```
-Customer → POST /orders → gets merchant wallet address + USDC amount
-         → sends USDC on Polygon (externally)
+Customer  --> POST /orders --> receives merchant wallet address + exact USDC amount
+          --> sends USDC on Polygon (external wallet transaction)
 
-Mural → webhook → our server detects deposit → matches to order
-      → auto-creates + executes USDC→COP payout to merchant bank
+Mural     --> webhook --> server detects deposit --> matches to pending order
+          --> auto-creates + executes USDC -> COP payout to merchant's bank
 
-Merchant → GET /merchant/orders   — view payment status
-         → GET /merchant/withdrawals — view COP withdrawal status
+Merchant  --> GET /merchant/orders       -- view all orders & payment status
+          --> GET /merchant/withdrawals  -- view COP withdrawal status
 ```
+
+**Order lifecycle:** `PENDING_PAYMENT` -> `PAID` -> `PAYOUT_PENDING` -> `PAYOUT_COMPLETE`
+
+---
 
 ## Tech Stack
 
-- **Node.js / TypeScript** + Express
-- **PostgreSQL** (raw `pg` queries)
-- **Mural Pay Sandbox API** for USDC custody and COP payouts
-- **node-cron** for backup transaction polling
-- Deployed on **Railway**
+| Component   | Choice                  | Rationale                                     |
+| ----------- | ----------------------- | --------------------------------------------- |
+| Runtime     | Node.js 20 / TypeScript | Fast iteration, strong typing                 |
+| Framework   | Express 5               | Lightweight, widely understood                |
+| Database    | PostgreSQL              | Relational, production-grade, supports enums  |
+| DB Client   | `pg` (raw SQL queries)  | No ORM overhead, full control over queries    |
+| HTTP Client | Axios                   | Clean interface for Mural API calls           |
+| Scheduler   | node-cron               | In-process backup polling for missed webhooks |
+| Deployment  | Railway                 | Easy deploy, public URL, PostgreSQL plugin    |
+
+---
+
+## Project Structure
+
+```
+src/
+  index.ts              # Entry point: init DB, start server, start cron
+  app.ts                # Express app setup, middleware, route mounting
+  config.ts             # Environment variable loading and validation
+  db.ts                 # PostgreSQL connection pool (pg)
+  initDb.ts             # Schema initialization (CREATE TABLE IF NOT EXISTS)
+  types.ts              # Shared TypeScript interfaces
+  routes/
+    products.ts         # GET /products, GET /products/:id
+    orders.ts           # POST /orders, GET /orders/:id
+    merchant.ts         # Auth-gated merchant dashboard endpoints
+    admin.ts            # POST /admin/setup, POST /admin/products, GET /admin/config
+    webhooks.ts         # POST /webhooks/mural (Mural event receiver)
+  services/
+    mural.ts            # Mural API client (accounts, payouts, webhooks, etc.)
+    orderService.ts     # Deposit matching: links incoming USDC to pending orders
+    payoutService.ts    # Payout lifecycle: create, execute, sync status
+  jobs/
+    pollTransactions.ts # Cron job: polls Mural transactions every 60s as webhook backup
+  middleware/
+    auth.ts             # x-api-key header validation for merchant/admin routes
+  utils/
+    formatters.ts       # Response formatting helpers
+scripts/
+  setup.ts              # One-time setup: create Mural resources + seed products
+  test-api.sh           # API smoke test suite (curl-based, no dependencies)
+```
 
 ---
 
 ## Setup Instructions
 
 ### Prerequisites
-- Node.js 20+
-- PostgreSQL database (or Railway PostgreSQL plugin)
-- Mural Pay Sandbox account with API Key + Transfer API Key
 
-### 1. Clone & Install
+- **Node.js 20+**
+- **PostgreSQL** database (local or hosted)
+- **Mural Pay Sandbox** account with:
+  - API Key
+  - Transfer API Key
+
+### 1. Clone and Install
 
 ```bash
 git clone <repo-url>
@@ -42,47 +86,72 @@ npm install
 
 ### 2. Configure Environment
 
-Copy `.env` and fill in your values:
+Create a `.env` file in the project root:
 
-```bash
-DATABASE_URL="postgresql://user:pass@host:5432/muralpay"
-MURAL_API_KEY="your-api-key"
-MURAL_TRANSFER_API_KEY="your-transfer-api-key"
+```env
+DATABASE_URL="postgresql://user:pass@localhost:5432/muralpay"
+MURAL_API_KEY="your-mural-api-key"
+MURAL_TRANSFER_API_KEY="your-mural-transfer-api-key"
 MURAL_BASE_URL="https://api-staging.muralpay.com"
 PORT=3000
-MERCHANT_API_SECRET="your-secret"
+MERCHANT_API_SECRET="your-secret-key"
 WEBHOOK_PUBLIC_URL="https://your-deployed-url.railway.app"
 ```
 
-### 3. Run Database Migration
+| Variable                 | Required | Description                                              |
+| ------------------------ | -------- | -------------------------------------------------------- |
+| `DATABASE_URL`           | Yes      | PostgreSQL connection string                             |
+| `MURAL_API_KEY`          | Yes      | Mural sandbox API key                                    |
+| `MURAL_TRANSFER_API_KEY` | Yes      | Mural transfer API key (for account creation & payouts)  |
+| `MURAL_BASE_URL`         | No       | Defaults to `https://api-staging.muralpay.com`           |
+| `PORT`                   | No       | Defaults to `3000`                                       |
+| `MERCHANT_API_SECRET`    | Yes      | Shared secret for merchant/admin endpoint authentication |
+| `WEBHOOK_PUBLIC_URL`     | No       | Public URL for webhook registration (set after deploy)   |
 
-The schema is initialized automatically on server startup via `src/initDb.ts`.
+### 3. Start the Server
 
-### 4. Run Setup Script (one-time)
+```bash
+# Development (with hot reload via nodemon)
+npm run dev
 
-Creates the Mural account, counterparty, COP payout method, and webhook:
+# Production
+npm run build
+npm start
+```
+
+The database schema is **auto-initialized on startup** via `src/initDb.ts` -- no separate migration step needed.
+
+### 4. Run Setup (one-time)
+
+The setup creates all necessary Mural resources and seeds sample products:
 
 ```bash
 npm run setup
 ```
 
-### 5. Start Dev Server
+This is idempotent and will:
 
-```bash
-npm run dev
-```
+1. Create (or reuse) a Mural account with a Polygon USDC wallet
+2. Create (or find) a counterparty representing the merchant
+3. Create (or find) a COP payout method with Colombian bank details
+4. Register and activate a webhook (if `WEBHOOK_PUBLIC_URL` is set)
+5. Seed 5 sample products (if none exist)
+
+Alternatively, use `POST /admin/setup` with the `x-api-key` header after the server is running.
 
 ---
 
 ## Deployment (Railway)
 
-1. Push repo to GitHub (public)
-2. Create new Railway project → Deploy from GitHub
-3. Add **PostgreSQL** plugin → copy `DATABASE_URL` to env vars
-4. Set all env vars from `.env`
-5. Set start command: `npm run build && node dist/index.js`
-6. After deploy, open Railway shell and run: `npm run setup`
-7. Note the public URL → set `WEBHOOK_PUBLIC_URL` → re-run `npm run setup` to register webhook
+1. Push the repo to GitHub
+2. Create a new Railway project and deploy from GitHub
+3. Add the **PostgreSQL** plugin -- copy `DATABASE_URL` to environment variables
+4. Set all environment variables from `.env`
+5. Railway will auto-detect the `Dockerfile` or use the start command from `railway.json`
+6. After deploy, note the public URL and set `WEBHOOK_PUBLIC_URL`
+7. Run setup via the API: `curl -X POST https://your-app.railway.app/admin/setup -H "x-api-key: your-secret"`
+
+The included `Dockerfile` and `railway.json` handle the build automatically.
 
 ---
 
@@ -90,45 +159,66 @@ npm run dev
 
 Full OpenAPI spec: [`openapi.json`](./openapi.json)
 
-### Customer Endpoints
+### Public Endpoints
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/health` | None | Health check |
-| GET | `/products` | None | List products |
-| GET | `/products/:id` | None | Get product |
-| POST | `/orders` | None | Create order |
-| GET | `/orders/:id` | None | Get order + payment status |
+| Method | Path            | Description                                    |
+| ------ | --------------- | ---------------------------------------------- |
+| GET    | `/health`       | Health check                                   |
+| GET    | `/products`     | List all active products                       |
+| GET    | `/products/:id` | Get a single product by ID                     |
+| POST   | `/orders`       | Create an order (returns wallet + USDC amount) |
+| GET    | `/orders/:id`   | Get order status, items, and withdrawal info   |
 
-### Merchant Endpoints (`x-api-key` header required)
+### Merchant Endpoints (requires `x-api-key` header)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/merchant/orders` | All orders with payment status |
-| GET | `/merchant/orders/:id` | Order detail + withdrawal |
-| GET | `/merchant/withdrawals` | All COP withdrawals |
-| GET | `/merchant/withdrawals/:id` | Withdrawal detail |
+| Method | Path                        | Description                            |
+| ------ | --------------------------- | -------------------------------------- |
+| GET    | `/merchant/orders`          | List all orders (paginated)            |
+| GET    | `/merchant/orders/:id`      | Order detail with items and withdrawal |
+| GET    | `/merchant/withdrawals`     | List all COP withdrawals (paginated)   |
+| GET    | `/merchant/withdrawals/:id` | Withdrawal detail with exchange rate   |
 
-### Admin Endpoints (`x-api-key` header required)
+### Admin Endpoints (requires `x-api-key` header)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/admin/setup` | Initialize Mural resources |
-| GET | `/admin/config` | View merchant config |
-| POST | `/admin/products` | Create a product |
+| Method | Path              | Description                             |
+| ------ | ----------------- | --------------------------------------- |
+| POST   | `/admin/setup`    | Initialize Mural resources (idempotent) |
+| GET    | `/admin/config`   | View current merchant configuration     |
+| POST   | `/admin/products` | Create a new product                    |
 
 ### Webhook
 
-`POST /webhooks/mural` — receives Mural events (not for direct use)
+| Method | Path              | Description                                |
+| ------ | ----------------- | ------------------------------------------ |
+| POST   | `/webhooks/mural` | Receives Mural events (not for direct use) |
 
 ---
 
-## Testing the Flow
+## Testing
 
-### 1. Create an Order
+### Smoke Test Suite
+
+An automated smoke test script exercises all endpoints:
 
 ```bash
-curl -X POST https://your-app.railway.app/orders \
+# Against local server (default)
+./scripts/test-api.sh
+
+# Against a deployed instance
+./scripts/test-api.sh https://your-app.railway.app
+
+# With a custom API key
+./scripts/test-api.sh https://your-app.railway.app your-secret-key
+```
+
+The script requires only `curl` and `python3`. It creates its own test fixtures and validates response status codes and body content. Exit code 0 means all tests passed.
+
+### Manual End-to-End Flow
+
+**1. Create an order:**
+
+```bash
+curl -X POST http://localhost:3000/orders \
   -H "Content-Type: application/json" \
   -d '{
     "customer": { "name": "Jane Doe", "email": "jane@example.com" },
@@ -136,89 +226,54 @@ curl -X POST https://your-app.railway.app/orders \
   }'
 ```
 
-Response includes `walletAddress` and `totalUsdc` — the customer sends exactly that amount of USDC to that Polygon address.
+The response includes `walletAddress`, `totalUsdc`, `blockchain: "POLYGON"`, and human-readable `instructions`.
 
-### 2. Simulate Payment
+**2. Send payment:**
 
-In the Mural dashboard: **Move Money → Pay → +Add Contact** → enter the merchant wallet address → send the exact USDC amount.
+Send the exact USDC amount to the wallet address on Polygon. In sandbox, use the Mural dashboard: **Move Money -> Pay -> +Add Contact** with the wallet address.
 
-### 3. Check Order Status
+**3. Check order status:**
 
 ```bash
-curl https://your-app.railway.app/orders/<order-id>
+curl http://localhost:3000/orders/<order-id>
 ```
 
-Status will progress: `PENDING_PAYMENT → PAID → PAYOUT_PENDING → PAYOUT_COMPLETE`
+Status progresses: `PENDING_PAYMENT` -> `PAID` -> `PAYOUT_PENDING` -> `PAYOUT_COMPLETE`
 
-### 4. Check Merchant Dashboard
+**4. View merchant dashboard:**
 
 ```bash
-# View orders
-curl https://your-app.railway.app/merchant/orders \
-  -H "x-api-key: merchant-secret-key"
-
-# View COP withdrawals
-curl https://your-app.railway.app/merchant/withdrawals \
-  -H "x-api-key: merchant-secret-key"
+curl http://localhost:3000/merchant/orders -H "x-api-key: your-secret"
+curl http://localhost:3000/merchant/withdrawals -H "x-api-key: your-secret"
 ```
 
 ---
 
-## Current Status
+## Database Schema
 
-- ✅ Product catalog (CRUD)
-- ✅ Order creation with USDC payment instructions
-- ✅ Mural webhook handler for deposit detection
-- ✅ Deposit-to-order matching (exact USDC amount)
-- ✅ Automatic USDC → COP payout on payment receipt
-- ✅ Payout status tracking via webhook + polling
-- ✅ Merchant dashboard (orders + withdrawals)
-- ✅ Backup polling job (60s interval)
-- ✅ OpenAPI specification
-- ⚠️ Webhook signature verification implemented but needs testing with a live Mural webhook
+The schema is auto-created on server startup. All tables use UUID primary keys.
 
----
+| Table            | Purpose                                                    |
+| ---------------- | ---------------------------------------------------------- |
+| `Product`        | Catalog items (name, price in USDC, stock, active flag)    |
+| `Customer`       | Buyer identity (name, email)                               |
+| `Order`          | Purchase record linking customer to payment state          |
+| `OrderItem`      | Line items within an order (product, quantity, unit price) |
+| `Withdrawal`     | Tracks USDC->COP payout requests and their Mural status    |
+| `MerchantConfig` | Singleton: Mural account ID, wallet, counterparty, webhook |
 
-## Payment Matching Pitfalls
+**Custom enums:**
 
-The challenge explicitly notes that a "fully-bulletproof matching system for incoming deposits" is difficult. Our approach: **match by exact USDC amount, FIFO**.
-
-**Known pitfalls:**
-
-1. **Duplicate amounts** — Two pending orders with the same USDC total are matched FIFO (oldest first). If the wrong customer paid, a manual refund is required.
-
-2. **Partial payments** — A customer sends the wrong amount. It won't match any order and sits as an unmatched deposit. Logged for manual review.
-
-3. **Late payments** — Payment arrives after order expiry. Not matched. Logged for manual review.
-
-4. **Missed webhooks** — Covered by 60-second backup polling. If the server was down during a payment window, the next poll will catch it.
-
-5. **Multiple deposits in quick succession** — Each is processed sequentially; the unique constraint on `muralTransactionId` prevents double-matching.
-
-**Mitigation options for production:**
-- Use unique payment references (add a small random amount to each order's USDC price, e.g. $10.003287)
-- Use Mural's Payin API to generate unique deposit addresses per order (not available in sandbox for USDC on Polygon)
+- `OrderStatus`: `PENDING_PAYMENT`, `PAID`, `PAYOUT_PENDING`, `PAYOUT_COMPLETE`, `PAYOUT_FAILED`, `EXPIRED`
+- `WithdrawalStatus`: `INITIATED`, `AWAITING_EXECUTION`, `PENDING`, `COMPLETED`, `FAILED`, `REFUND_IN_PROGRESS`, `REFUNDED`
 
 ---
 
-## Future Work
+## Payment Matching
 
-1. **Unique payment amounts** — Embed a unique sub-cent amount per order (e.g. `$10.003287`) to make matching deterministic.
+Incoming USDC deposits are matched to pending orders by **exact amount (FIFO)**. When a deposit webhook arrives (or the 60-second polling job runs), the system:
 
-2. **Order expiry cron** — Periodic job to mark stale `PENDING_PAYMENT` orders as `EXPIRED`.
-
-3. **Idempotency keys** — Pass UUID idempotency keys to Mural payout creation for safe retries.
-
-4. **Proper auth** — JWT-based customer auth instead of open endpoints; role-based access for merchant.
-
-5. **Webhook retry handling** — Persist webhook event log to prevent duplicate processing across restarts.
-
-6. **Rate limiting** — Protect public endpoints from abuse.
-
-7. **Monitoring** — Integrate error tracking (Sentry) and structured logging (Pino/Winston).
-
-8. **Admin UI** — Simple dashboard for the merchant to manage products and view orders.
-
-9. **Stock management** — Decrement stock on order creation, restore on expiry/failure.
-
-10. **Multi-currency** — Accept EUR or other stablecoins, not just USDC on Polygon.
+1. Fetches recent transactions from the Mural API
+2. Filters for deposits not yet matched to an order
+3. For each deposit, finds the oldest `PENDING_PAYMENT` order with a matching `totalUsdc`
+4. Marks the order as `PAID` and immediately initiates a COP payout
