@@ -112,14 +112,21 @@ adminRouter.post('/setup', async (_req: Request, res: Response) => {
   }
 
   if (!webhookId && config.webhookPublicUrl && !config.webhookPublicUrl.includes('your-app')) {
-    const wh = await mural.createWebhook(
-      `${config.webhookPublicUrl}/webhooks/mural`,
-      [WEBHOOK_CATEGORIES.BALANCE_ACTIVITY, WEBHOOK_CATEGORIES.PAYOUT_REQUEST],
-    );
-    webhookId = wh.id;
-    webhookPublicKey = wh.publicKey;
-    await mural.activateWebhook(webhookId);
-    steps.push('Registered and activated webhook');
+    try {
+      const rawUrl = config.webhookPublicUrl;
+      const baseUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
+      const wh = await mural.createWebhook(
+        `${baseUrl}/webhooks/mural`,
+        [WEBHOOK_CATEGORIES.BALANCE_ACTIVITY, WEBHOOK_CATEGORIES.PAYOUT_REQUEST],
+      );
+      webhookId = wh.id;
+      webhookPublicKey = wh.publicKey;
+      await mural.activateWebhook(webhookId);
+      steps.push('Registered and activated webhook');
+    } catch (err) {
+      console.warn('[setup] Webhook registration failed (non-fatal):', err);
+      steps.push('Webhook registration skipped (error)');
+    }
   }
 
   await pool.query(
